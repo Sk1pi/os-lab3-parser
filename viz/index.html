@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AST — дерево розбору виразів</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #e9eef3;
+    --panel: #f6f8fa;
+    --ink: #1c2b3a;
+    --muted: #5e6e7e;
+    --grid: #d5dde5;
+    --line: #9fb0c0;
+    --op: #2457c5;
+    --num: #2e7d5b;
+    --var: #7a3fb0;
+    --assign: #a63b22;
+    --error: #b3261e;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #121a22;
+      --panel: #19232d;
+      --ink: #e3eaf1;
+      --muted: #93a3b3;
+      --grid: #1f2b37;
+      --line: #4a5b6c;
+      --op: #7aa2ff;
+      --num: #5fc495;
+      --var: #c19bf0;
+      --assign: #f08a6c;
+      --error: #ff8a80;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    color: var(--ink);
+    background-color: var(--paper);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 24px 24px;
+    min-height: 100vh;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(240px, 320px) 1fr;
+    min-height: 100vh;
+  }
+  aside {
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    padding: 20px 16px;
+    overflow-y: auto;
+  }
+  aside h1 {
+    font-size: 1.15rem;
+    margin: 0 0 4px;
+  }
+  aside p {
+    margin: 0 0 16px;
+    color: var(--muted);
+    font-size: 0.9rem;
+    line-height: 1.45;
+  }
+  .stmt {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+  }
+  .stmt:hover { border-color: var(--line); }
+  .stmt:focus-visible { outline: 2px solid var(--op); outline-offset: 2px; }
+  .stmt[aria-current="true"] {
+    border-color: var(--op);
+    background: color-mix(in srgb, var(--op) 8%, transparent);
+  }
+  .stmt code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.88rem;
+    word-break: break-all;
+  }
+  .stmt .res { display: block; font-size: 0.82rem; color: var(--muted); margin-top: 2px; }
+  .stmt .res.err { color: var(--error); }
+
+  main { padding: 28px 32px; overflow: hidden; }
+  .expr {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: clamp(1.3rem, 2.6vw, 2rem);
+    font-weight: 600;
+    margin: 0 0 6px;
+    word-break: break-all;
+  }
+  .verdict { margin: 0 0 18px; color: var(--muted); }
+  .verdict.err { color: var(--error); }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 8px;
+    font-size: 0.88rem;
+    color: var(--muted);
+  }
+  .legend span::before {
+    content: "";
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+    background: var(--c);
+  }
+  .tree-wrap { overflow-x: auto; }
+  svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+  .link { fill: none; stroke: var(--line); stroke-width: 1.5; }
+  .node circle { stroke-width: 2; fill: var(--panel); cursor: pointer; }
+  .node text.label {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-weight: 600;
+    font-size: 15px;
+    fill: var(--ink);
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+  }
+  .node text.value {
+    font-size: 12px;
+    fill: var(--muted);
+    text-anchor: middle;
+    pointer-events: none;
+  }
+  .node.collapsed circle { stroke-dasharray: 3 3; }
+  h2 { font-size: 1rem; margin: 24px 0 8px; }
+  pre {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.9rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    margin: 0;
+  }
+  .hint { color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
+  @media (max-width: 760px) {
+    .layout { grid-template-columns: 1fr; }
+    aside { border-right: none; border-bottom: 1px solid var(--line); }
+    main { padding: 20px 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside>
+    <h1>Дерево розбору</h1>
+    <p>Оберіть вираз, щоб побачити його AST, обчислене значення і згенерований код на C.</p>
+    <nav id="list"></nav>
+  </aside>
+  <main>
+    <p class="expr" id="expr"></p>
+    <p class="verdict" id="verdict"></p>
+    <div class="legend">
+      <span style="--c: var(--op)">операція</span>
+      <span style="--c: var(--num)">число</span>
+      <span style="--c: var(--var)">змінна</span>
+      <span style="--c: var(--assign)">присвоєння</span>
+    </div>
+    <div class="tree-wrap"><svg id="tree"></svg></div>
+    <p class="hint">Клік по вузлу згортає або розгортає піддерево. Під вузлом показано значення цього піддерева.</p>
+    <h2>Згенерований код на C</h2>
+    <pre id="code"></pre>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="ast.js"></script>
+<script>
+const data = window.AST_DATA || [];
+const list = document.getElementById("list");
+const colorOf = {
+  operator: "var(--op)", unary: "var(--op)", number: "var(--num)",
+  variable: "var(--var)", target: "var(--var)", assign: "var(--assign)"
+};
+
+if (!data.length) {
+  document.getElementById("expr").textContent = "Немає даних";
+  document.getElementById("verdict").textContent =
+    "Запустіть ./calc examples/input.txt у папці проєкту: він створить viz/ast.js, а потім оновіть сторінку.";
+}
+
+data.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.className = "stmt";
+  b.innerHTML = `<code></code><span class="res"></span>`;
+  b.querySelector("code").textContent = s.text;
+  const r = b.querySelector(".res");
+  if (s.error) { r.textContent = "помилка: " + s.error; r.classList.add("err"); }
+  else r.textContent = "= " + s.result;
+  b.addEventListener("click", () => show(i));
+  list.appendChild(b);
+});
+
+function show(i) {
+  const s = data[i];
+  list.querySelectorAll(".stmt").forEach((b, j) => b.setAttribute("aria-current", j === i));
+  document.getElementById("expr").textContent = s.text;
+  const v = document.getElementById("verdict");
+  v.className = "verdict" + (s.error ? " err" : "");
+  v.textContent = s.error ? "Помилка обчислення: " + s.error : "Результат: " + s.result;
+  document.getElementById("code").textContent =
+    s.code || "// код не згенеровано: вираз містить помилку";
+  draw(d3.hierarchy(s.ast));
+}
+
+function draw(root) {
+  const svg = d3.select("#tree");
+  svg.selectAll("*").remove();
+  d3.tree().nodeSize([70, 86])(root);
+
+  let x0 = Infinity, x1 = -Infinity, y1 = 0;
+  root.each(d => { x0 = Math.min(x0, d.x); x1 = Math.max(x1, d.x); y1 = Math.max(y1, d.y); });
+  const pad = 40;
+  svg.attr("viewBox", [x0 - pad, -pad, x1 - x0 + pad * 2, y1 + pad * 2 + 20])
+     .attr("width", x1 - x0 + pad * 2);
+
+  svg.append("g").selectAll("path").data(root.links()).join("path")
+    .attr("class", "link")
+    .attr("d", d3.linkVertical().x(d => d.x).y(d => d.y));
+
+  const node = svg.append("g").selectAll("g").data(root.descendants()).join("g")
+    .attr("class", d => "node" + (d.data._hidden ? " collapsed" : ""))
+    .attr("transform", d => `translate(${d.x},${d.y})`)
+    .on("click", (e, d) => toggle(d, root));
+
+  node.append("title").text(d => d.data.kind);
+  node.append("circle").attr("r", 20).attr("stroke", d => colorOf[d.data.kind] || "var(--line)");
+  node.append("text").attr("class", "label").text(d => d.data.name);
+  node.filter(d => d.data.value !== undefined && d.data.kind !== "number")
+    .append("text").attr("class", "value").attr("y", 36).text(d => "= " + d.data.value);
+}
+
+function toggle(d, root) {
+  const n = d.data;
+  if (n.children && n.children.length) { n._hidden = n.children; n.children = []; }
+  else if (n._hidden) { n.children = n._hidden; n._hidden = null; }
+  else return;
+  draw(d3.hierarchy(root.data));
+}
+
+if (data.length) show(0);
+</script>
+</body>
+</html>
